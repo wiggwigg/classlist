@@ -1,0 +1,956 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Classlist Builder</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
+  <style>
+    :root {
+      --bg: #eef8fb;
+      --card: #ffffff;
+      --ink: #12303c;
+      --muted: #3f6876;
+      --line: #bdd9e3;
+      --accent: rgb(0, 108, 145);
+      --accent-2: rgb(0, 154, 188);
+      --good: #0d6f4b;
+      --warn: #7a4b1f;
+      --bad: #7a1f2f;
+      --shadow: 0 18px 42px rgba(20, 32, 19, 0.1);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Manrope", "Segoe UI", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(1200px 700px at 5% -10%, rgba(0, 154, 188, 0.28) 0%, rgba(0, 154, 188, 0) 65%),
+        radial-gradient(900px 600px at 100% 0%, rgba(0, 108, 145, 0.3) 0%, rgba(0, 108, 145, 0) 60%),
+        var(--bg);
+      padding: 28px 14px;
+    }
+
+    .shell {
+      width: min(980px, 100%);
+      margin: 0 auto;
+      background: var(--card);
+      border: 1px solid rgba(20, 32, 19, 0.08);
+      border-radius: 18px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .hero {
+      padding: 28px 24px 22px;
+      background: linear-gradient(135deg, #00475f 0%, rgb(0, 108, 145) 45%, rgb(0, 154, 188) 100%);
+      color: #f7fff7;
+    }
+
+    .hero h1 {
+      margin: 0;
+      font-size: clamp(1.5rem, 1.2rem + 1.3vw, 2.2rem);
+      line-height: 1.15;
+      letter-spacing: 0.01em;
+    }
+
+    .hero p {
+      margin: 10px 0 0;
+      max-width: 64ch;
+      color: rgba(247, 255, 255, 0.92);
+    }
+
+    .hero-notice {
+      margin-top: 12px;
+      max-width: 68ch;
+      border: 1px solid rgba(255, 255, 255, 0.45);
+      background: rgba(255, 255, 255, 0.18);
+      border-radius: 10px;
+      padding: 10px 12px;
+      color: #f7ffff;
+      font-weight: 600;
+    }
+
+    .body {
+      padding: 22px;
+      display: grid;
+      gap: 16px;
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 14px;
+      background: #fff;
+    }
+
+    .panel h2 {
+      margin: 0 0 8px;
+      font-size: 1.05rem;
+    }
+
+    .helper {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.94rem;
+    }
+
+    .grid {
+      margin-top: 12px;
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    }
+
+    label {
+      display: grid;
+      gap: 6px;
+      font-weight: 600;
+      font-size: 0.92rem;
+    }
+
+    input[type="file"],
+    select,
+    button {
+      font: inherit;
+    }
+
+    input[type="file"],
+    select {
+      width: 100%;
+      border: 1px solid #b4d1db;
+      border-radius: 10px;
+      padding: 9px 10px;
+      background: #f7fcff;
+      color: var(--ink);
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      margin-top: 14px;
+    }
+
+    button {
+      border: 0;
+      border-radius: 999px;
+      background: linear-gradient(90deg, var(--accent) 0%, var(--accent-2) 100%);
+      color: white;
+      padding: 10px 18px;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+      cursor: pointer;
+      transition: transform 120ms ease, opacity 120ms ease;
+    }
+
+    button:hover:not(:disabled) {
+      transform: translateY(-1px);
+    }
+
+    button:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+
+    .badge {
+      display: inline-block;
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.82rem;
+      background: #f0f9fd;
+      border: 1px solid #bfdbe5;
+      border-radius: 999px;
+      padding: 4px 9px;
+      color: #295462;
+    }
+
+    #status {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px 12px;
+      background: #f2f9fc;
+      color: #1f4b59;
+      min-height: 42px;
+      display: grid;
+      align-items: center;
+    }
+
+    #status.good {
+      border-color: #bfdbc7;
+      background: #edf8f0;
+      color: var(--good);
+    }
+
+    #status.warn {
+      border-color: #e6c9a8;
+      background: #fef5e9;
+      color: var(--warn);
+    }
+
+    #status.bad {
+      border-color: #e5bcc5;
+      background: #fff1f4;
+      color: var(--bad);
+    }
+
+    #summary {
+      border: 1px dashed #b8d4df;
+      border-radius: 10px;
+      padding: 12px;
+      background: #f8fdff;
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.84rem;
+      white-space: pre-wrap;
+      color: #30515c;
+      display: none;
+    }
+
+    @media (max-width: 700px) {
+      body {
+        padding: 14px 10px;
+      }
+
+      .hero,
+      .body {
+        padding: 16px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <h1>Classlist Builder</h1>
+      <p>Select one Allocate Exel student list export - this app will split students into class tabs based on Unique ID, and export a sorted workbook with internal links from the master tab.</p>
+      <div class="hero-notice">No data is uploaded or stored - this app runs in your local browser session only.</div>
+    </section>
+
+    <section class="body">
+      <section class="panel">
+        <h2>1. Source File</h2>
+        <p class="helper">The app reads the first worksheet only. No upload leaves your browser.</p>
+        <div class="grid">
+          <label>
+            Excel File (.xlsx or .xls)
+            <input id="fileInput" type="file" accept=".xlsx,.xls" />
+          </label>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>2. Column Mapping</h2>
+        <p class="helper">Column picks are auto-filled after loading the file. Adjust if needed.</p>
+        <div class="grid">
+          <label>
+            Unique ID (required)
+            <select id="uniqueIdSelect"></select>
+          </label>
+          <label>
+            Student Name (required)
+            <select id="studentNameSelect"></select>
+          </label>
+          <label>
+            Student ID (required)
+            <select id="studentIdSelect"></select>
+          </label>
+          <label>
+            Student Email (optional)
+            <select id="studentEmailSelect"></select>
+          </label>
+        </div>
+
+        <div class="actions">
+          <button id="buildButton" type="button" disabled>Build and Download</button>
+          <span id="sheetLabel" class="badge">No file loaded</span>
+        </div>
+      </section>
+
+      <div id="status">Select an Excel file to begin.</div>
+      <pre id="summary"></pre>
+    </section>
+  </main>
+
+  <script>
+    (() => {
+      const HEADER_ROW = ["Student ID", "Last name", "First Name", "Student Name", "Student Email"];
+      const REQUIRED_KEYS = ["uniqueId", "studentName", "studentId"];
+      const LINK_COLOR_ARGB = "FF006C91";
+
+      const selects = {
+        uniqueId: document.getElementById("uniqueIdSelect"),
+        studentName: document.getElementById("studentNameSelect"),
+        studentId: document.getElementById("studentIdSelect"),
+        studentEmail: document.getElementById("studentEmailSelect")
+      };
+
+      const fileInput = document.getElementById("fileInput");
+      const buildButton = document.getElementById("buildButton");
+      const statusNode = document.getElementById("status");
+      const summaryNode = document.getElementById("summary");
+      const sheetLabel = document.getElementById("sheetLabel");
+
+      const state = {
+        rows: [],
+        sourceSheetName: "",
+        headerRowIndex: -1,
+        columns: []
+      };
+
+      const HEADER_SYNONYMS = {
+        uniqueId: ["uniqueid", "unique id", "classid", "class id", "teid", "activityid", "id"],
+        studentName: ["studentname", "student name", "name", "fullname", "full name"],
+        studentId: ["studentid", "student id", "idnumber", "studentnumber", "student number"],
+        studentEmail: ["studentemail", "student email", "email", "mail", "e-mail"]
+      };
+
+      fileInput.addEventListener("change", async (event) => {
+        const file = event.target.files?.[0];
+        if (!file) {
+          return;
+        }
+
+        try {
+          setStatus("Loading workbook...", "warn");
+          await loadWorkbook(file);
+          buildButton.disabled = false;
+          setStatus("Workbook loaded. Confirm column mapping, then build your output file.", "good");
+        } catch (error) {
+          buildButton.disabled = true;
+          clearSelects();
+          setStatus(error.message || "Unable to read this workbook.", "bad");
+        }
+      });
+
+      buildButton.addEventListener("click", async () => {
+        try {
+          setStatus("Building workbook...", "warn");
+          const result = await buildWorkbook();
+          downloadBlob(result.blob, result.fileName);
+          setStatus(`Finished. Downloaded ${result.fileName}`, "good");
+          renderSummary(result.summary);
+        } catch (error) {
+          setStatus(error.message || "Failed to build workbook.", "bad");
+        }
+      });
+
+      function setStatus(message, kind) {
+        statusNode.textContent = message;
+        statusNode.className = "";
+        if (kind) {
+          statusNode.classList.add(kind);
+        }
+      }
+
+      function renderSummary(text) {
+        summaryNode.style.display = "block";
+        summaryNode.textContent = text;
+      }
+
+      function clearSummary() {
+        summaryNode.style.display = "none";
+        summaryNode.textContent = "";
+      }
+
+      function clearSelects() {
+        Object.values(selects).forEach((node) => {
+          node.innerHTML = "";
+        });
+      }
+
+      async function loadWorkbook(file) {
+        if (typeof XLSX === "undefined") {
+          throw new Error("SheetJS library did not load. Check internet connection and reload.");
+        }
+
+        const data = await file.arrayBuffer();
+        const workbook = XLSX.read(data, { type: "array", raw: false });
+
+        if (!workbook.SheetNames.length) {
+          throw new Error("Workbook has no worksheets.");
+        }
+
+        const sourceSheetName = workbook.SheetNames[0];
+        const sheet = workbook.Sheets[sourceSheetName];
+        const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", raw: false });
+
+        if (!rows.length) {
+          throw new Error("The first worksheet is empty.");
+        }
+
+        const headerRowIndex = detectHeaderRow(rows);
+        const columns = buildColumns(rows[headerRowIndex]);
+
+        state.rows = rows;
+        state.sourceSheetName = sourceSheetName;
+        state.headerRowIndex = headerRowIndex;
+        state.columns = columns;
+
+        sheetLabel.textContent = `Sheet: ${sourceSheetName} | Header row: ${headerRowIndex + 1}`;
+        populateMappingUI(columns);
+        clearSummary();
+      }
+
+      function detectHeaderRow(rows) {
+        const limit = Math.min(rows.length, 30);
+        let bestRow = -1;
+        let bestScore = -1;
+
+        for (let i = 0; i < limit; i += 1) {
+          const row = rows[i] || [];
+          const nonEmpty = row.filter((cell) => normalizeText(cell) !== "").length;
+          if (!nonEmpty) {
+            continue;
+          }
+
+          const textCells = row.filter((cell) => /[A-Za-z]/.test(String(cell))).length;
+          const normalized = row.map((cell) => normalizeText(cell));
+          const hints = normalized.reduce((count, key) => {
+            return count + (isKnownHeaderToken(key) ? 1 : 0);
+          }, 0);
+
+          const score = (hints * 12) + (textCells * 2) + nonEmpty;
+          if (score > bestScore) {
+            bestScore = score;
+            bestRow = i;
+          }
+        }
+
+        if (bestRow === -1) {
+          throw new Error("No usable header row found in the first worksheet.");
+        }
+
+        return bestRow;
+      }
+
+      function isKnownHeaderToken(token) {
+        return Object.values(HEADER_SYNONYMS).some((aliases) => aliases.includes(token));
+      }
+
+      function buildColumns(headerRow) {
+        const row = Array.isArray(headerRow) ? headerRow : [];
+        const lastIndex = row.reduce((last, value, idx) => {
+          return normalizeText(value) ? idx : last;
+        }, -1);
+
+        if (lastIndex < 0) {
+          throw new Error("Header row has no column labels.");
+        }
+
+        const seen = new Map();
+        const columns = [];
+
+        for (let i = 0; i <= lastIndex; i += 1) {
+          const rawLabel = String(row[i] ?? "").trim();
+          const baseLabel = rawLabel || `Column ${XLSX.utils.encode_col(i)}`;
+          const count = (seen.get(baseLabel) || 0) + 1;
+          seen.set(baseLabel, count);
+          const label = count === 1 ? baseLabel : `${baseLabel} (${count})`;
+
+          columns.push({ index: i, label });
+        }
+
+        return columns;
+      }
+
+      function populateMappingUI(columns) {
+        clearSelects();
+
+        fillSelect(selects.uniqueId, columns, false);
+        fillSelect(selects.studentName, columns, false);
+        fillSelect(selects.studentId, columns, false);
+        fillSelect(selects.studentEmail, columns, true);
+
+        autoSelectColumn(selects.uniqueId, columns, HEADER_SYNONYMS.uniqueId);
+        autoSelectColumn(selects.studentName, columns, HEADER_SYNONYMS.studentName);
+        autoSelectColumn(selects.studentId, columns, HEADER_SYNONYMS.studentId);
+        autoSelectColumn(selects.studentEmail, columns, HEADER_SYNONYMS.studentEmail);
+      }
+
+      function fillSelect(node, columns, allowEmpty) {
+        if (allowEmpty) {
+          const option = document.createElement("option");
+          option.value = "";
+          option.textContent = "(leave blank)";
+          node.appendChild(option);
+        } else {
+          const option = document.createElement("option");
+          option.value = "";
+          option.textContent = "Select a column";
+          node.appendChild(option);
+        }
+
+        columns.forEach((column) => {
+          const option = document.createElement("option");
+          option.value = String(column.index);
+          option.textContent = column.label;
+          node.appendChild(option);
+        });
+      }
+
+      function autoSelectColumn(node, columns, synonyms) {
+        const synonymSet = new Set(synonyms.map((s) => normalizeText(s)));
+
+        let bestColumn = null;
+        let bestScore = -1;
+
+        columns.forEach((column) => {
+          const normalized = normalizeText(column.label);
+          let score = 0;
+
+          if (synonymSet.has(normalized)) {
+            score = 100;
+          } else {
+            synonymSet.forEach((token) => {
+              if (normalized.includes(token) || token.includes(normalized)) {
+                score = Math.max(score, 50);
+              }
+            });
+          }
+
+          if (score > bestScore) {
+            bestScore = score;
+            bestColumn = column;
+          }
+        });
+
+        if (bestColumn && bestScore > 0) {
+          node.value = String(bestColumn.index);
+        }
+      }
+
+      function getSelectedIndexes() {
+        const selected = {
+          uniqueId: parseSelectValue(selects.uniqueId.value),
+          studentName: parseSelectValue(selects.studentName.value),
+          studentId: parseSelectValue(selects.studentId.value),
+          studentEmail: parseSelectValue(selects.studentEmail.value)
+        };
+
+        REQUIRED_KEYS.forEach((key) => {
+          if (selected[key] === null) {
+            throw new Error(`Please choose the ${labelForKey(key)} column.`);
+          }
+        });
+
+        return selected;
+      }
+
+      function parseSelectValue(value) {
+        if (value === "") {
+          return null;
+        }
+
+        const index = Number(value);
+        return Number.isFinite(index) ? index : null;
+      }
+
+      async function buildWorkbook() {
+        const selected = getSelectedIndexes();
+        const students = [];
+        const skipped = [];
+
+        for (let rowIndex = state.headerRowIndex + 1; rowIndex < state.rows.length; rowIndex += 1) {
+          const row = state.rows[rowIndex] || [];
+          const uniqueId = textCell(row, selected.uniqueId);
+          const studentName = textCell(row, selected.studentName);
+          const studentId = normalizeStudentId(textCell(row, selected.studentId));
+          const studentEmail = selected.studentEmail === null ? "" : textCell(row, selected.studentEmail);
+
+          if (!uniqueId && !studentName && !studentId && !studentEmail) {
+            continue;
+          }
+
+          if (!uniqueId) {
+            skipped.push(`Row ${rowIndex + 1}: missing Unique ID`);
+            continue;
+          }
+
+          const parsed = parseUniqueId(uniqueId);
+          if (!parsed) {
+            skipped.push(`Row ${rowIndex + 1}: invalid Unique ID format (${uniqueId})`);
+            continue;
+          }
+
+          const split = splitStudentName(studentName);
+          students.push({
+            ...parsed,
+            classKey: `${parsed.classTypeRaw.toUpperCase()}::${parsed.classNumber}`,
+            studentId,
+            lastName: split.lastName,
+            firstName: split.firstName,
+            studentName,
+            studentEmail
+          });
+        }
+
+        if (!students.length) {
+          throw new Error("No valid student rows were found. Check your column mapping and input data.");
+        }
+
+        if (typeof ExcelJS === "undefined") {
+          throw new Error("ExcelJS library did not load. Check internet connection and reload.");
+        }
+
+        students.sort(compareStudents);
+
+        const groups = groupByClass(students);
+        const usedNames = new Set();
+
+        const unitCode = mostCommon(students.map((s) => s.unitCode)) || "Classlist";
+        const location = mostCommon(students.map((s) => s.location));
+        const year = mostCommon(students.map((s) => s.year));
+        const semester = mostCommon(students.map((s) => s.semester));
+
+        const unitSheetName = uniqueSheetName(unitCode, usedNames);
+        const sheetNameByClass = new Map();
+
+        groups.forEach((group) => {
+          const sheetName = uniqueSheetName(group.label, usedNames);
+          group.sheetName = sheetName;
+          sheetNameByClass.set(group.key, sheetName);
+        });
+
+        const headingParts = [unitCode, location, year, semester].filter(Boolean);
+        const heading = headingParts.join(", ");
+
+        const workbook = new ExcelJS.Workbook();
+        const unitSheet = workbook.addWorksheet(unitSheetName);
+        applyColumnLayout(unitSheet);
+
+        unitSheet.getCell("A1").value = heading || unitCode;
+        unitSheet.mergeCells("A1:E1");
+        const unitHeaderRow = unitSheet.addRow(HEADER_ROW);
+        applyHeaderStyle(unitHeaderRow);
+
+        students.forEach((student) => {
+          unitSheet.addRow([
+            student.studentId,
+            student.lastName,
+            student.firstName,
+            student.studentName,
+            student.studentEmail
+          ]);
+        });
+
+        unitSheet.autoFilter = {
+          from: { row: 2, column: 1 },
+          to: { row: students.length + 2, column: 5 }
+        };
+
+        students.forEach((student, index) => {
+          const classSheetName = sheetNameByClass.get(student.classKey);
+          if (!classSheetName) {
+            return;
+          }
+
+          const rowNumber = index + 3;
+          const safeTarget = classSheetName.replace(/'/g, "''");
+
+          const cell = unitSheet.getCell(rowNumber, 1);
+          cell.value = {
+            text: student.studentId || "",
+            hyperlink: `#'${safeTarget}'!A1`
+          };
+          cell.font = {
+            color: { argb: LINK_COLOR_ARGB },
+            underline: true
+          };
+        });
+
+        groups.forEach((group) => {
+          const classSheet = workbook.addWorksheet(group.sheetName);
+          applyColumnLayout(classSheet);
+
+          const classHeaderRow = classSheet.addRow(HEADER_ROW);
+          applyHeaderStyle(classHeaderRow);
+
+          group.students.forEach((student) => {
+            classSheet.addRow([
+              student.studentId,
+              student.lastName,
+              student.firstName,
+              student.studentName,
+              student.studentEmail
+            ]);
+          });
+
+          classSheet.autoFilter = {
+            from: { row: 1, column: 1 },
+            to: { row: group.students.length + 1, column: 5 }
+          };
+        });
+
+        const output = await workbook.xlsx.writeBuffer();
+        const blob = new Blob([output], {
+          type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        });
+
+        const fileName = sanitizeFileName(`${unitCode}_${year || "year"}_${semester || "semester"}_classlists.xlsx`);
+        const summary = [
+          `Input sheet: ${state.sourceSheetName}`,
+          `Header row: ${state.headerRowIndex + 1}`,
+          `Students exported: ${students.length}`,
+          `Class tabs created: ${groups.length}`,
+          `Master tab: ${unitSheetName}`,
+          skipped.length ? `Skipped rows (${skipped.length}):\n- ${skipped.slice(0, 10).join("\n- ")}` : "Skipped rows: 0"
+        ].join("\n");
+
+        return { blob, fileName, summary };
+      }
+
+      function textCell(row, index) {
+        if (index === null) {
+          return "";
+        }
+
+        const value = row[index];
+        if (value === undefined || value === null) {
+          return "";
+        }
+
+        return String(value).trim();
+      }
+
+      function normalizeStudentId(value) {
+        const trimmed = String(value || "").trim();
+        if (!trimmed) {
+          return "";
+        }
+
+        if (/^\d+\.0+$/.test(trimmed)) {
+          return trimmed.replace(/\.0+$/, "");
+        }
+
+        return trimmed;
+      }
+
+      function parseUniqueId(rawValue) {
+        const raw = String(rawValue || "").trim();
+        if (!raw) {
+          return null;
+        }
+
+        const parts = raw.split("/").map((p) => p.trim()).filter(Boolean);
+        if (parts.length < 6) {
+          return null;
+        }
+
+        const unitCode = parts[0] || "";
+        const location = parts[1] || "";
+        const year = parts[2] || "";
+        const semester = parts[3] || "";
+        const classTypeRaw = parts[parts.length - 2] || "";
+        const classNumber = parts[parts.length - 1] || "";
+
+        if (!classTypeRaw || !classNumber) {
+          return null;
+        }
+
+        const classType = toTitleCase(classTypeRaw.replace(/[\-_]+/g, " "));
+        const label = `${classType} ${classNumber}`.trim();
+
+        return {
+          unitCode,
+          location,
+          year,
+          semester,
+          classTypeRaw,
+          classNumber,
+          classLabel: label
+        };
+      }
+
+      function splitStudentName(name) {
+        const raw = String(name || "").trim();
+        if (!raw) {
+          return { firstName: "", lastName: "" };
+        }
+
+        if (raw.includes(",")) {
+          const segments = raw.split(",");
+          const lastName = (segments[0] || "").trim();
+          const firstName = segments.slice(1).join(",").trim();
+          return { firstName, lastName };
+        }
+
+        const parts = raw.split(/\s+/).filter(Boolean);
+        if (parts.length === 1) {
+          return { firstName: "", lastName: parts[0] };
+        }
+
+        return {
+          firstName: parts.slice(0, -1).join(" "),
+          lastName: parts[parts.length - 1]
+        };
+      }
+
+      function groupByClass(students) {
+        const map = new Map();
+
+        students.forEach((student) => {
+          if (!map.has(student.classKey)) {
+            map.set(student.classKey, {
+              key: student.classKey,
+              label: student.classLabel,
+              students: []
+            });
+          }
+
+          map.get(student.classKey).students.push(student);
+        });
+
+        const groups = Array.from(map.values());
+        groups.forEach((group) => group.students.sort(compareStudents));
+        groups.sort((a, b) => compareText(a.label, b.label));
+        return groups;
+      }
+
+      function compareStudents(a, b) {
+        return (
+          compareText(a.lastName, b.lastName) ||
+          compareText(a.firstName, b.firstName) ||
+          compareText(a.studentId, b.studentId)
+        );
+      }
+
+      function compareText(a, b) {
+        return String(a || "").localeCompare(String(b || ""), undefined, {
+          sensitivity: "base",
+          numeric: true
+        });
+      }
+
+      function mostCommon(values) {
+        const counts = new Map();
+        let topValue = "";
+        let topCount = 0;
+
+        values.forEach((value) => {
+          const normalized = String(value || "").trim();
+          if (!normalized) {
+            return;
+          }
+
+          const next = (counts.get(normalized) || 0) + 1;
+          counts.set(normalized, next);
+
+          if (next > topCount) {
+            topCount = next;
+            topValue = normalized;
+          }
+        });
+
+        return topValue;
+      }
+
+      function defaultColumns() {
+        return [15, 18, 18, 28, 34];
+      }
+
+      function applyColumnLayout(worksheet) {
+        const widths = defaultColumns();
+        widths.forEach((width, index) => {
+          worksheet.getColumn(index + 1).width = width;
+        });
+      }
+
+      function applyHeaderStyle(row) {
+        row.eachCell((cell) => {
+          cell.font = { bold: true };
+        });
+      }
+
+      function uniqueSheetName(base, usedNames) {
+        const sanitized = sanitizeSheetName(base || "Sheet");
+
+        if (!usedNames.has(sanitized)) {
+          usedNames.add(sanitized);
+          return sanitized;
+        }
+
+        let counter = 2;
+        while (counter < 999) {
+          const suffix = ` ${counter}`;
+          const cropped = sanitized.slice(0, 31 - suffix.length).trimEnd();
+          const candidate = `${cropped}${suffix}`;
+          if (!usedNames.has(candidate)) {
+            usedNames.add(candidate);
+            return candidate;
+          }
+          counter += 1;
+        }
+
+        throw new Error("Too many tabs with the same name.");
+      }
+
+      function sanitizeSheetName(value) {
+        const cleaned = String(value || "")
+          .replace(/[\[\]\*\?\/\\:]/g, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+
+        const fallback = cleaned || "Sheet";
+        return fallback.slice(0, 31);
+      }
+
+      function sanitizeFileName(value) {
+        const cleaned = String(value || "output.xlsx")
+          .replace(/[<>:"/\\|?*]/g, "-")
+          .replace(/\s+/g, "_");
+
+        return cleaned || "output.xlsx";
+      }
+
+      function downloadBlob(blob, fileName) {
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = fileName;
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        URL.revokeObjectURL(url);
+      }
+
+      function toTitleCase(value) {
+        return String(value || "")
+          .toLowerCase()
+          .split(/\s+/)
+          .filter(Boolean)
+          .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+          .join(" ");
+      }
+
+      function labelForKey(key) {
+        switch (key) {
+          case "uniqueId":
+            return "Unique ID";
+          case "studentName":
+            return "Student Name";
+          case "studentId":
+            return "Student ID";
+          default:
+            return key;
+        }
+      }
+
+      function normalizeText(value) {
+        return String(value || "")
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, " ")
+          .trim();
+      }
+    })();
+  </script>
+</body>
+</html>
