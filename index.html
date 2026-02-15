@@ -119,12 +119,16 @@
     }
 
     input[type="file"],
+    input[type="number"],
+    input[type="date"],
     select,
     button {
       font: inherit;
     }
 
     input[type="file"],
+    input[type="number"],
+    input[type="date"],
     select {
       width: 100%;
       border: 1px solid #b4d1db;
@@ -215,6 +219,49 @@
       display: none;
     }
 
+    .weeks-config {
+      margin-top: 14px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .toggle-label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 700;
+      font-size: 0.92rem;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .toggle-label input[type="checkbox"] {
+      width: 18px;
+      height: 18px;
+      margin: 0;
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+
+    .weeks-panel {
+      border: 1px solid #bfdbe5;
+      border-radius: 10px;
+      background: #f7fcff;
+      padding: 0 12px;
+      max-height: 0;
+      opacity: 0;
+      overflow: hidden;
+      transform: translateX(-10px);
+      transition: max-height 220ms ease, opacity 180ms ease, transform 220ms ease, padding 220ms ease;
+    }
+
+    .weeks-panel.open {
+      max-height: 420px;
+      opacity: 1;
+      transform: translateX(0);
+      padding: 12px;
+    }
+
     @media (max-width: 700px) {
       body {
         padding: 14px 10px;
@@ -269,6 +316,29 @@
           </label>
         </div>
 
+        <div class="weeks-config">
+          <label class="toggle-label" for="includeWeeksCheckbox">
+            <input id="includeWeeksCheckbox" type="checkbox" />
+            Include Weeks
+          </label>
+          <div id="weeksPanel" class="weeks-panel" aria-hidden="true">
+            <div class="grid">
+              <label>
+                Total Weeks
+                <input id="totalWeeksInput" type="number" min="1" step="1" value="13" />
+              </label>
+              <label>
+                Start Date
+                <input id="startDateInput" type="date" value="2026-02-16" />
+              </label>
+              <label>
+                Class Free Week
+                <select id="classFreeWeekSelect"></select>
+              </label>
+            </div>
+          </div>
+        </div>
+
         <div class="actions">
           <button id="buildButton" type="button" disabled>Build and Download</button>
           <span id="sheetLabel" class="badge">No file loaded</span>
@@ -282,9 +352,17 @@
 
   <script>
     (() => {
-      const HEADER_ROW = ["Student ID", "Last name", "First Name", "Student Name", "Student Email"];
+      const CLASS_TAB_BASE_HEADER_ROW = ["Student ID", "Last name", "First Name", "Student Name", "Student Email"];
+      const MASTER_BASE_HEADER_ROW = CLASS_TAB_BASE_HEADER_ROW.concat("Class");
       const REQUIRED_KEYS = ["uniqueId", "studentName", "studentId"];
       const LINK_COLOR_ARGB = "FF006C91";
+      const TITLE_COLOR_ARGB = "FF006C91";
+      const CLASS_FREE_FILL_ARGB = "FFE6E6E6";
+      const EMAIL_COLUMN_INDEX = CLASS_TAB_BASE_HEADER_ROW.indexOf("Student Email") + 1;
+      const MASTER_CLASS_COLUMN_INDEX = MASTER_BASE_HEADER_ROW.indexOf("Class") + 1;
+      const DEFAULT_TOTAL_WEEKS = 13;
+      const DEFAULT_CLASS_FREE_WEEK = 9;
+      const DEFAULT_START_DATE = "2026-02-16";
 
       const selects = {
         uniqueId: document.getElementById("uniqueIdSelect"),
@@ -298,6 +376,11 @@
       const statusNode = document.getElementById("status");
       const summaryNode = document.getElementById("summary");
       const sheetLabel = document.getElementById("sheetLabel");
+      const includeWeeksCheckbox = document.getElementById("includeWeeksCheckbox");
+      const weeksPanel = document.getElementById("weeksPanel");
+      const totalWeeksInput = document.getElementById("totalWeeksInput");
+      const startDateInput = document.getElementById("startDateInput");
+      const classFreeWeekSelect = document.getElementById("classFreeWeekSelect");
 
       const state = {
         rows: [],
@@ -312,6 +395,18 @@
         studentId: ["studentid", "student id", "idnumber", "studentnumber", "student number"],
         studentEmail: ["studentemail", "student email", "email", "mail", "e-mail"]
       };
+
+      startDateInput.value = DEFAULT_START_DATE;
+      syncClassFreeWeekOptions(DEFAULT_CLASS_FREE_WEEK);
+      toggleWeeksPanel(false);
+
+      includeWeeksCheckbox.addEventListener("change", () => {
+        toggleWeeksPanel(includeWeeksCheckbox.checked);
+      });
+
+      totalWeeksInput.addEventListener("change", () => {
+        syncClassFreeWeekOptions();
+      });
 
       fileInput.addEventListener("change", async (event) => {
         const file = event.target.files?.[0];
@@ -365,6 +460,64 @@
         Object.values(selects).forEach((node) => {
           node.innerHTML = "";
         });
+      }
+
+      function toggleWeeksPanel(isOpen) {
+        weeksPanel.classList.toggle("open", isOpen);
+        weeksPanel.setAttribute("aria-hidden", isOpen ? "false" : "true");
+      }
+
+      function syncClassFreeWeekOptions(preferredWeek = null) {
+        const totalWeeks = normalizeTotalWeeks(totalWeeksInput.value);
+        totalWeeksInput.value = String(totalWeeks);
+
+        const selectedWeek = clampWeekNumber(
+          preferredWeek === null ? classFreeWeekSelect.value : preferredWeek,
+          totalWeeks
+        );
+
+        classFreeWeekSelect.innerHTML = "";
+        for (let week = 1; week <= totalWeeks; week += 1) {
+          const option = document.createElement("option");
+          option.value = String(week);
+          option.textContent = String(week);
+          classFreeWeekSelect.appendChild(option);
+        }
+        classFreeWeekSelect.value = String(selectedWeek);
+      }
+
+      function getWeekConfiguration() {
+        if (!includeWeeksCheckbox.checked) {
+          return {
+            enabled: false,
+            totalWeeks: 0,
+            classFreeWeek: null,
+            columns: []
+          };
+        }
+
+        const totalWeeks = normalizeTotalWeeks(totalWeeksInput.value);
+        totalWeeksInput.value = String(totalWeeks);
+        syncClassFreeWeekOptions();
+
+        const classFreeWeek = clampWeekNumber(classFreeWeekSelect.value, totalWeeks);
+        classFreeWeekSelect.value = String(classFreeWeek);
+
+        const inputStartDate = parseIsoDate(startDateInput.value);
+        const startDate = inputStartDate || parseIsoDate(DEFAULT_START_DATE);
+        if (!startDate) {
+          throw new Error("Unable to parse the start date.");
+        }
+        if (!inputStartDate) {
+          startDateInput.value = DEFAULT_START_DATE;
+        }
+
+        return {
+          enabled: true,
+          totalWeeks,
+          classFreeWeek,
+          columns: buildWeekColumns(totalWeeks, startDate, classFreeWeek)
+        };
       }
 
       async function loadWorkbook(file) {
@@ -556,6 +709,15 @@
 
       async function buildWorkbook() {
         const selected = getSelectedIndexes();
+        const weekConfig = getWeekConfiguration();
+        const weekColumns = weekConfig.columns;
+        const masterHeaderRowValues = buildHeaderRow(MASTER_BASE_HEADER_ROW, weekColumns);
+        const classHeaderRowValues = buildHeaderRow(CLASS_TAB_BASE_HEADER_ROW, weekColumns);
+        const emptyWeekValues = weekColumns.map(() => "");
+        const masterWeekStartColumn = MASTER_BASE_HEADER_ROW.length + 1;
+        const classWeekStartColumn = CLASS_TAB_BASE_HEADER_ROW.length + 1;
+        const masterDataStartRow = 3;
+        const classDataStartRow = 3;
         const students = [];
         const skipped = [];
 
@@ -625,70 +787,95 @@
 
         const workbook = new ExcelJS.Workbook();
         const unitSheet = workbook.addWorksheet(unitSheetName);
-        applyColumnLayout(unitSheet);
+        applyColumnLayout(unitSheet, weekColumns.length, true);
 
         unitSheet.getCell("A1").value = heading || unitCode;
-        unitSheet.mergeCells("A1:E1");
-        const unitHeaderRow = unitSheet.addRow(HEADER_ROW);
-        applyHeaderStyle(unitHeaderRow);
+        unitSheet.mergeCells(1, 1, 1, masterHeaderRowValues.length);
+        unitSheet.getCell("A1").font = {
+          bold: true,
+          size: 14,
+          color: { argb: TITLE_COLOR_ARGB }
+        };
+        const unitHeaderRow = unitSheet.addRow(masterHeaderRowValues);
+        applyHeaderStyle(unitHeaderRow, weekColumns, masterWeekStartColumn);
 
         students.forEach((student) => {
+          const classSheetName = sheetNameByClass.get(student.classKey) || "";
+          student.classSheetName = classSheetName;
           unitSheet.addRow([
             student.studentId,
             student.lastName,
             student.firstName,
             student.studentName,
-            student.studentEmail
+            student.studentEmail,
+            classSheetName,
+            ...emptyWeekValues
           ]);
         });
 
+        applyEmailLinks(unitSheet, students, masterDataStartRow);
+        applyWeekDataStyle(unitSheet, weekColumns, masterDataStartRow, students.length + 2, masterWeekStartColumn);
+        applyDataRowBorders(unitSheet, masterDataStartRow, students.length + 2, masterHeaderRowValues.length);
+
         unitSheet.autoFilter = {
           from: { row: 2, column: 1 },
-          to: { row: students.length + 2, column: 5 }
+          to: { row: students.length + 2, column: masterHeaderRowValues.length }
         };
-
-        students.forEach((student, index) => {
-          const classSheetName = sheetNameByClass.get(student.classKey);
-          if (!classSheetName) {
-            return;
-          }
-
-          const rowNumber = index + 3;
-          const safeTarget = classSheetName.replace(/'/g, "''");
-
-          const cell = unitSheet.getCell(rowNumber, 1);
-          cell.value = {
-            text: student.studentId || "",
-            hyperlink: `#'${safeTarget}'!A1`
-          };
-          cell.font = {
-            color: { argb: LINK_COLOR_ARGB },
-            underline: true
-          };
-        });
 
         groups.forEach((group) => {
           const classSheet = workbook.addWorksheet(group.sheetName);
-          applyColumnLayout(classSheet);
+          applyColumnLayout(classSheet, weekColumns.length, false);
 
-          const classHeaderRow = classSheet.addRow(HEADER_ROW);
-          applyHeaderStyle(classHeaderRow);
+          classSheet.getCell("A1").value = group.sheetName;
+          classSheet.mergeCells(1, 1, 1, classHeaderRowValues.length);
+          classSheet.getCell("A1").font = {
+            bold: true,
+            size: 14,
+            color: { argb: TITLE_COLOR_ARGB }
+          };
+
+          const classHeaderRow = classSheet.addRow(classHeaderRowValues);
+          applyHeaderStyle(classHeaderRow, weekColumns, classWeekStartColumn);
 
           group.students.forEach((student) => {
-            classSheet.addRow([
+            const row = classSheet.addRow([
               student.studentId,
               student.lastName,
               student.firstName,
               student.studentName,
-              student.studentEmail
+              student.studentEmail,
+              ...emptyWeekValues
             ]);
+            student.classSheetName = group.sheetName;
+            student.classSheetRowNumber = row.number;
           });
 
+          applyEmailLinks(classSheet, group.students, classDataStartRow);
+          applyWeekDataStyle(classSheet, weekColumns, classDataStartRow, group.students.length + 2, classWeekStartColumn);
+          applyDataRowBorders(classSheet, classDataStartRow, group.students.length + 2, classHeaderRowValues.length);
+
           classSheet.autoFilter = {
-            from: { row: 1, column: 1 },
-            to: { row: group.students.length + 1, column: 5 }
+            from: { row: 2, column: 1 },
+            to: { row: group.students.length + 2, column: classHeaderRowValues.length }
           };
         });
+
+        applyMasterWeekReferences(
+          unitSheet,
+          students,
+          weekColumns,
+          masterDataStartRow,
+          masterWeekStartColumn,
+          classWeekStartColumn
+        );
+        applyMasterClassLinks(unitSheet, students, masterDataStartRow);
+        await lockMasterWeekColumns(
+          unitSheet,
+          masterDataStartRow,
+          students.length + 2,
+          masterHeaderRowValues.length,
+          masterWeekStartColumn
+        );
 
         const output = await workbook.xlsx.writeBuffer();
         const blob = new Blob([output], {
@@ -702,6 +889,7 @@
           `Students exported: ${students.length}`,
           `Class tabs created: ${groups.length}`,
           `Master tab: ${unitSheetName}`,
+          weekConfig.enabled ? `Weeks included: ${weekConfig.totalWeeks} (Class Free Week: ${weekConfig.classFreeWeek})` : "Weeks included: no",
           skipped.length ? `Skipped rows (${skipped.length}):\n- ${skipped.slice(0, 10).join("\n- ")}` : "Skipped rows: 0"
         ].join("\n");
 
@@ -853,21 +1041,316 @@
         return topValue;
       }
 
-      function defaultColumns() {
-        return [15, 18, 18, 28, 34];
+      function normalizeTotalWeeks(value) {
+        const parsed = Number.parseInt(String(value || ""), 10);
+        if (!Number.isFinite(parsed) || parsed < 1) {
+          return DEFAULT_TOTAL_WEEKS;
+        }
+        return parsed;
       }
 
-      function applyColumnLayout(worksheet) {
-        const widths = defaultColumns();
+      function clampWeekNumber(value, totalWeeks) {
+        const parsed = Number.parseInt(String(value || ""), 10);
+        const fallback = Math.min(DEFAULT_CLASS_FREE_WEEK, totalWeeks);
+        if (!Number.isFinite(parsed) || parsed < 1) {
+          return fallback;
+        }
+        return Math.min(parsed, totalWeeks);
+      }
+
+      function parseIsoDate(value) {
+        const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || ""));
+        if (!match) {
+          return null;
+        }
+
+        const year = Number(match[1]);
+        const month = Number(match[2]);
+        const day = Number(match[3]);
+        const date = new Date(year, month - 1, day);
+
+        if (
+          Number.isNaN(date.getTime()) ||
+          date.getFullYear() !== year ||
+          date.getMonth() !== month - 1 ||
+          date.getDate() !== day
+        ) {
+          return null;
+        }
+
+        return date;
+      }
+
+      function buildWeekColumns(totalWeeks, startDate, classFreeWeek) {
+        const weekColumns = [];
+        for (let week = 1; week <= totalWeeks; week += 1) {
+          const date = addDays(startDate, (week - 1) * 7);
+          const weekNumberLabel = formatWeekNumber(week);
+          weekColumns.push({
+            weekNumber: week,
+            label: `${weekNumberLabel} - ${formatDayMonth(date)}`,
+            isClassFree: week === classFreeWeek
+          });
+        }
+        return weekColumns;
+      }
+
+      function addDays(date, days) {
+        const next = new Date(date);
+        next.setDate(next.getDate() + days);
+        return next;
+      }
+
+      function formatDayMonth(date) {
+        const day = String(date.getDate()).padStart(2, "0");
+        const month = String(date.getMonth() + 1).padStart(2, "0");
+        return `${day}/${month}`;
+      }
+
+      function formatWeekNumber(value) {
+        return String(value).padStart(2, "0");
+      }
+
+      function buildHeaderRow(baseHeaderRow, weekColumns) {
+        return baseHeaderRow.concat(weekColumns.map((week) => week.label));
+      }
+
+      function defaultColumns(weekCount = 0, includeClassColumn = false) {
+        const widths = [15, 18, 18, 28, 34];
+        if (includeClassColumn) {
+          widths.push(18);
+        }
+        for (let i = 0; i < weekCount; i += 1) {
+          widths.push(5.5);
+        }
+        return widths;
+      }
+
+      function applyColumnLayout(worksheet, weekCount = 0, includeClassColumn = false) {
+        const widths = defaultColumns(weekCount, includeClassColumn);
         widths.forEach((width, index) => {
           worksheet.getColumn(index + 1).width = width;
         });
       }
 
-      function applyHeaderStyle(row) {
+      function applyHeaderStyle(row, weekColumns = [], weekStartColumn = null) {
         row.eachCell((cell) => {
           cell.font = { bold: true };
         });
+
+        if (!weekColumns.length || weekStartColumn === null) {
+          return;
+        }
+
+        row.height = 82;
+
+        weekColumns.forEach((week, index) => {
+          const cell = row.getCell(weekStartColumn + index);
+          cell.alignment = {
+            horizontal: "left",
+            vertical: "middle",
+            textRotation: 90,
+            wrapText: true
+          };
+          const headerBorder = cell.border || {};
+          cell.border = {
+            left: { style: "thin" },
+            right: { style: "thin" },
+            top: headerBorder.top,
+            bottom: headerBorder.bottom,
+            diagonal: headerBorder.diagonal,
+            diagonalUp: headerBorder.diagonalUp,
+            diagonalDown: headerBorder.diagonalDown
+          };
+          if (week.isClassFree) {
+            cell.fill = classFreeFill();
+          }
+        });
+      }
+
+      function applyWeekDataStyle(worksheet, weekColumns, firstDataRow, lastDataRow, weekStartColumn) {
+        if (!weekColumns.length || lastDataRow < firstDataRow || weekStartColumn === null) {
+          return;
+        }
+
+        weekColumns.forEach((week, index) => {
+          const column = weekStartColumn + index;
+          for (let row = firstDataRow; row <= lastDataRow; row += 1) {
+            const cell = worksheet.getCell(row, column);
+            cell.alignment = {
+              horizontal: "center",
+              vertical: "middle"
+            };
+            const existingBorder = cell.border || {};
+            cell.border = {
+              left: { style: "thin" },
+              right: { style: "thin" },
+              top: existingBorder.top,
+              bottom: existingBorder.bottom,
+              diagonal: existingBorder.diagonal,
+              diagonalUp: existingBorder.diagonalUp,
+              diagonalDown: existingBorder.diagonalDown
+            };
+            if (week.isClassFree) {
+              cell.fill = classFreeFill();
+            }
+          }
+        });
+      }
+
+      function applyMasterWeekReferences(
+        worksheet,
+        students,
+        weekColumns,
+        firstDataRow,
+        masterWeekStartColumn,
+        classWeekStartColumn
+      ) {
+        if (!weekColumns.length) {
+          return;
+        }
+
+        students.forEach((student, index) => {
+          const classSheetName = student.classSheetName;
+          const classSheetRowNumber = student.classSheetRowNumber;
+          if (!classSheetName || !classSheetRowNumber) {
+            return;
+          }
+
+          const safeSheetName = classSheetName.replace(/'/g, "''");
+
+          weekColumns.forEach((_, weekIndex) => {
+            const masterCell = worksheet.getCell(firstDataRow + index, masterWeekStartColumn + weekIndex);
+            const classColumnLetter = columnNumberToLetter(classWeekStartColumn + weekIndex);
+            const sourceRef = `'${safeSheetName}'!${classColumnLetter}${classSheetRowNumber}`;
+            masterCell.value = {
+              formula: `IF(${sourceRef}="", "", ${sourceRef})`
+            };
+          });
+        });
+      }
+
+      function applyMasterClassLinks(worksheet, students, firstDataRow) {
+        students.forEach((student, index) => {
+          const classSheetName = student.classSheetName;
+          const classSheetRowNumber = student.classSheetRowNumber;
+          if (!classSheetName || !classSheetRowNumber) {
+            return;
+          }
+
+          const safeTarget = classSheetName.replace(/'/g, "''");
+          const rowNumber = firstDataRow + index;
+
+          const idCell = worksheet.getCell(rowNumber, 1);
+          idCell.value = {
+            text: student.studentId || "",
+            hyperlink: `#'${safeTarget}'!A${classSheetRowNumber}`
+          };
+          idCell.font = {
+            color: { argb: LINK_COLOR_ARGB },
+            underline: true
+          };
+
+          const classCell = worksheet.getCell(rowNumber, MASTER_CLASS_COLUMN_INDEX);
+          classCell.value = {
+            text: classSheetName,
+            hyperlink: `#'${safeTarget}'!A${classSheetRowNumber}`
+          };
+          classCell.font = {
+            color: { argb: LINK_COLOR_ARGB },
+            underline: true
+          };
+        });
+      }
+
+      async function lockMasterWeekColumns(worksheet, firstDataRow, lastDataRow, totalColumns, weekStartColumn) {
+        if (lastDataRow < firstDataRow || weekStartColumn > totalColumns) {
+          return;
+        }
+
+        for (let row = firstDataRow; row <= lastDataRow; row += 1) {
+          for (let column = 1; column <= totalColumns; column += 1) {
+            worksheet.getCell(row, column).protection = {
+              locked: column >= weekStartColumn
+            };
+          }
+        }
+
+        await worksheet.protect("", {
+          selectLockedCells: true,
+          selectUnlockedCells: true,
+          formatCells: false,
+          formatColumns: false,
+          formatRows: false,
+          insertColumns: false,
+          insertRows: false,
+          insertHyperlinks: false,
+          deleteColumns: false,
+          deleteRows: false,
+          sort: false,
+          autoFilter: true,
+          pivotTables: false
+        });
+      }
+
+      function columnNumberToLetter(columnNumber) {
+        let value = columnNumber;
+        let label = "";
+        while (value > 0) {
+          const remainder = (value - 1) % 26;
+          label = String.fromCharCode(65 + remainder) + label;
+          value = Math.floor((value - 1) / 26);
+        }
+        return label;
+      }
+
+      function applyEmailLinks(worksheet, students, firstDataRow) {
+        students.forEach((student, index) => {
+          const email = String(student.studentEmail || "").trim();
+          if (!email) {
+            return;
+          }
+
+          const cell = worksheet.getCell(firstDataRow + index, EMAIL_COLUMN_INDEX);
+          cell.value = {
+            text: email,
+            hyperlink: `mailto:${email}`
+          };
+          cell.font = {
+            color: { argb: LINK_COLOR_ARGB },
+            underline: true
+          };
+        });
+      }
+
+      function applyDataRowBorders(worksheet, firstDataRow, lastDataRow, totalColumns) {
+        if (lastDataRow < firstDataRow) {
+          return;
+        }
+
+        for (let row = firstDataRow; row <= lastDataRow; row += 1) {
+          for (let column = 1; column <= totalColumns; column += 1) {
+            const cell = worksheet.getCell(row, column);
+            const existing = cell.border || {};
+            cell.border = {
+              left: existing.left,
+              right: existing.right,
+              top: { style: "thin" },
+              bottom: { style: "thin" },
+              diagonal: existing.diagonal,
+              diagonalUp: existing.diagonalUp,
+              diagonalDown: existing.diagonalDown
+            };
+          }
+        }
+      }
+
+      function classFreeFill() {
+        return {
+          type: "pattern",
+          pattern: "solid",
+          fgColor: { argb: CLASS_FREE_FILL_ARGB }
+        };
       }
 
       function uniqueSheetName(base, usedNames) {
