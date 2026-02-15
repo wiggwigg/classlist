@@ -291,6 +291,10 @@
             Excel File (.xlsx or .xls)
             <input id="fileInput" type="file" accept=".xlsx,.xls" />
           </label>
+          <label>
+            Photo Report (.mhtml or .mht, optional)
+            <input id="photoReportInput" type="file" accept=".mhtml,.mht" />
+          </label>
         </div>
       </section>
 
@@ -372,6 +376,7 @@
       };
 
       const fileInput = document.getElementById("fileInput");
+      const photoReportInput = document.getElementById("photoReportInput");
       const buildButton = document.getElementById("buildButton");
       const statusNode = document.getElementById("status");
       const summaryNode = document.getElementById("summary");
@@ -710,6 +715,7 @@
       async function buildWorkbook() {
         const selected = getSelectedIndexes();
         const weekConfig = getWeekConfiguration();
+        const photoReport = await getPhotoReport();
         const weekColumns = weekConfig.columns;
         const masterHeaderRowValues = buildHeaderRow(MASTER_BASE_HEADER_ROW, weekColumns);
         const classHeaderRowValues = buildHeaderRow(CLASS_TAB_BASE_HEADER_ROW, weekColumns);
@@ -780,6 +786,9 @@
           const sheetName = uniqueSheetName(group.label, usedNames);
           group.sheetName = sheetName;
           sheetNameByClass.set(group.key, sheetName);
+          if (photoReport.included) {
+            group.photoSheetName = uniqueSheetName(`${sheetName} Photos`, usedNames);
+          }
         });
 
         const headingParts = [unitCode, location, year, semester].filter(Boolean);
@@ -858,7 +867,18 @@
             from: { row: 2, column: 1 },
             to: { row: group.students.length + 2, column: classHeaderRowValues.length }
           };
+
         });
+
+        if (photoReport.included) {
+          groups.forEach((group) => {
+            if (!group.photoSheetName) {
+              return;
+            }
+            const photoSheet = workbook.addWorksheet(group.photoSheetName);
+            buildClassPhotoSheet(workbook, photoSheet, group.sheetName, group.students, photoReport.photosByStudentId);
+          });
+        }
 
         applyMasterWeekReferences(
           unitSheet,
@@ -888,8 +908,10 @@
           `Header row: ${state.headerRowIndex + 1}`,
           `Students exported: ${students.length}`,
           `Class tabs created: ${groups.length}`,
+          photoReport.included ? `Photo tabs created: ${groups.length}` : "Photo tabs created: 0",
           `Master tab: ${unitSheetName}`,
           weekConfig.enabled ? `Weeks included: ${weekConfig.totalWeeks} (Class Free Week: ${weekConfig.classFreeWeek})` : "Weeks included: no",
+          photoReport.included ? `Photo report: ${photoReport.fileName} | Matched photos: ${photoReport.photosByStudentId.size}` : "Photo report: not included",
           skipped.length ? `Skipped rows (${skipped.length}):\n- ${skipped.slice(0, 10).join("\n- ")}` : "Skipped rows: 0"
         ].join("\n");
 
@@ -1079,6 +1101,350 @@
         }
 
         return date;
+      }
+
+      async function getPhotoReport() {
+        const file = photoReportInput.files?.[0];
+        if (!file) {
+          return {
+            included: false,
+            fileName: "",
+            photosByStudentId: new Map()
+          };
+        }
+
+        if (!/\.mht(?:ml)?$/i.test(file.name)) {
+          throw new Error("Photo report must be an .mhtml or .mht file.");
+        }
+
+        const rawText = await file.text();
+        const parsed = parseMhtmlPhotoReport(rawText);
+        return {
+          included: true,
+          fileName: file.name,
+          photosByStudentId: parsed.photosByStudentId
+        };
+      }
+
+      function parseMhtmlPhotoReport(rawText) {
+        const boundaryMatch = /boundary="([^"]+)"/i.exec(rawText) || /boundary=([^\r\n;]+)/i.exec(rawText);
+        if (!boundaryMatch) {
+          throw new Error("Photo report is missing a MIME boundary.");
+        }
+
+        const boundary = String(boundaryMatch[1] || "").replace(/^["']|["']$/g, "").trim();
+        if (!boundary) {
+          throw new Error("Photo report boundary is invalid.");
+        }
+
+        const delimiter = `--${boundary}`;
+        const rawParts = String(rawText || "")
+          .split(delimiter)
+          .map((part) => part.trim())
+          .filter((part) => part && part !== "--");
+
+        const parts = rawParts
+          .map((part) => splitMhtmlPart(part))
+          .filter(Boolean);
+
+        const htmlPart = parts.find((part) => part.contentType === "text/html");
+        if (!htmlPart) {
+          throw new Error("Photo report does not contain an HTML body.");
+        }
+
+        const html = htmlPart.transferEncoding === "quoted-printable"
+          ? decodeQuotedPrintable(htmlPart.body)
+          : htmlPart.body;
+
+        const photoKeyByStudentId = extractStudentPhotoKeysFromHtml(html);
+        const imageByKey = new Map();
+
+        parts.forEach((part) => {
+          if (!part.contentType.startsWith("image/")) {
+            return;
+          }
+          if (part.transferEncoding !== "base64") {
+            return;
+          }
+
+          const key = normalizeImageKey(part.contentLocation);
+          if (!key) {
+            return;
+          }
+
+          const base64Payload = part.body.replace(/\s+/g, "");
+          if (!base64Payload) {
+            return;
+          }
+
+          imageByKey.set(key, {
+            base64: `data:${part.contentType};base64,${base64Payload}`,
+            extension: imageExtensionFromContentType(part.contentType, key)
+          });
+        });
+
+        const keyUsage = new Map();
+        photoKeyByStudentId.forEach((key) => {
+          keyUsage.set(key, (keyUsage.get(key) || 0) + 1);
+        });
+
+        const photosByStudentId = new Map();
+        photoKeyByStudentId.forEach((key, studentId) => {
+          if ((keyUsage.get(key) || 0) > 1) {
+            return;
+          }
+          const image = imageByKey.get(key);
+          if (!image) {
+            return;
+          }
+          photosByStudentId.set(studentId, image);
+        });
+
+        return {
+          photosByStudentId
+        };
+      }
+
+      function splitMhtmlPart(rawPart) {
+        const normalized = String(rawPart || "").replace(/^\r?\n/, "");
+        let separatorIndex = normalized.indexOf("\r\n\r\n");
+        let separatorLength = 4;
+
+        if (separatorIndex === -1) {
+          separatorIndex = normalized.indexOf("\n\n");
+          separatorLength = 2;
+        }
+
+        if (separatorIndex === -1) {
+          return null;
+        }
+
+        const headerText = normalized.slice(0, separatorIndex);
+        const body = normalized.slice(separatorIndex + separatorLength).trim();
+        const headers = parseMhtmlHeaders(headerText);
+
+        return {
+          contentType: (headers["content-type"] || "").split(";")[0].trim().toLowerCase(),
+          contentLocation: headers["content-location"] || "",
+          transferEncoding: (headers["content-transfer-encoding"] || "").trim().toLowerCase(),
+          body
+        };
+      }
+
+      function parseMhtmlHeaders(headerText) {
+        const lines = String(headerText || "").split(/\r?\n/);
+        const unfolded = [];
+
+        lines.forEach((line) => {
+          if (/^[ \t]/.test(line) && unfolded.length) {
+            unfolded[unfolded.length - 1] += ` ${line.trim()}`;
+            return;
+          }
+          if (line.trim()) {
+            unfolded.push(line.trim());
+          }
+        });
+
+        const headers = {};
+        unfolded.forEach((line) => {
+          const colon = line.indexOf(":");
+          if (colon === -1) {
+            return;
+          }
+          const key = line.slice(0, colon).trim().toLowerCase();
+          const value = line.slice(colon + 1).trim();
+          headers[key] = value;
+        });
+
+        return headers;
+      }
+
+      function decodeQuotedPrintable(input) {
+        const joined = String(input || "").replace(/=\r?\n/g, "");
+        return joined.replace(/=([0-9A-F]{2})/gi, (_, hex) => {
+          return String.fromCharCode(Number.parseInt(hex, 16));
+        });
+      }
+
+      function extractStudentPhotoKeysFromHtml(html) {
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, "text/html");
+        const anchors = Array.from(doc.querySelectorAll('a[href*="datavalue=|"]'));
+        const map = new Map();
+
+        anchors.forEach((anchor) => {
+          const studentId = extractStudentIdFromAnchor(anchor);
+          if (!studentId || map.has(studentId)) {
+            return;
+          }
+
+          const startRow = anchor.closest("tr");
+          let row = startRow;
+          if (!row) {
+            return;
+          }
+          let imageKey = "";
+
+          while (row) {
+            if (row !== startRow && row.querySelector('a[href*="datavalue=|"]')) {
+              break;
+            }
+            const img = row.querySelector("img[src]");
+            if (img) {
+              imageKey = normalizeImageKey(img.getAttribute("src"));
+              break;
+            }
+            row = row.nextElementSibling;
+          }
+
+          if (imageKey) {
+            map.set(studentId, imageKey);
+          }
+        });
+
+        return map;
+      }
+
+      function extractStudentIdFromAnchor(anchor) {
+        const href = String(anchor?.getAttribute("href") || "");
+        const fromHref = /datavalue=\|\s*(\d{5,10})/i.exec(href) || /(\d{5,10})/.exec(href);
+        const fromText = /(\d{5,10})/.exec(String(anchor?.textContent || ""));
+        const value = fromHref?.[1] || fromText?.[1] || "";
+        return normalizeStudentId(value);
+      }
+
+      function normalizeImageKey(value) {
+        const normalized = String(value || "").trim();
+        if (!normalized) {
+          return "";
+        }
+        const withoutQuery = normalized.split("?")[0];
+        const fileName = withoutQuery.slice(withoutQuery.lastIndexOf("/") + 1);
+        return fileName.toLowerCase();
+      }
+
+      function imageExtensionFromContentType(contentType, fileName) {
+        const type = String(contentType || "").toLowerCase();
+        if (type.includes("jpeg") || type.includes("jpg")) {
+          return "jpeg";
+        }
+        if (type.includes("png")) {
+          return "png";
+        }
+        if (type.includes("gif")) {
+          return "gif";
+        }
+
+        const match = /\.([a-z0-9]+)$/i.exec(String(fileName || ""));
+        return match ? match[1].toLowerCase() : "png";
+      }
+
+      function buildClassPhotoSheet(workbook, worksheet, className, students, photosByStudentId) {
+        const cardsPerRow = 4;
+        const cardWidthColumns = 2;
+        const cardColumnStride = 3;
+        const imageRows = 6;
+        const cardRowStride = 9;
+        const firstCardRow = 3;
+        const lastUsedColumn = (cardsPerRow * cardColumnStride) - 1;
+
+        worksheet.getCell("A1").value = `${className} Photos`;
+        worksheet.mergeCells(1, 1, 1, lastUsedColumn);
+        worksheet.getCell("A1").font = {
+          bold: true,
+          size: 14,
+          color: { argb: TITLE_COLOR_ARGB }
+        };
+
+        for (let column = 1; column <= lastUsedColumn; column += 1) {
+          worksheet.getColumn(column).width = column % cardColumnStride === 0 ? 2.5 : 16;
+        }
+        worksheet.getRow(2).height = 8;
+
+        students.forEach((student, index) => {
+          const cardRow = Math.floor(index / cardsPerRow);
+          const cardColumn = index % cardsPerRow;
+          const leftColumn = (cardColumn * cardColumnStride) + 1;
+          const rightColumn = leftColumn + cardWidthColumns - 1;
+          const topRow = firstCardRow + (cardRow * cardRowStride);
+          const imageBottomRow = topRow + imageRows - 1;
+          const nameRow = imageBottomRow + 1;
+          const idRow = nameRow + 1;
+
+          for (let row = topRow; row <= idRow; row += 1) {
+            const rowNode = worksheet.getRow(row);
+            if (row <= imageBottomRow) {
+              rowNode.height = Math.max(rowNode.height || 0, 18);
+            } else {
+              rowNode.height = Math.max(rowNode.height || 0, 20);
+            }
+          }
+
+          applyPhotoCardFill(worksheet, topRow, idRow, leftColumn, rightColumn);
+
+          const displayName = String(student.studentName || "").trim()
+            || [student.firstName, student.lastName].filter(Boolean).join(" ").trim()
+            || "(No name)";
+
+          worksheet.mergeCells(nameRow, leftColumn, nameRow, rightColumn);
+          const nameCell = worksheet.getCell(nameRow, leftColumn);
+          nameCell.value = displayName;
+          nameCell.font = { bold: true };
+          nameCell.alignment = {
+            horizontal: "center",
+            vertical: "middle",
+            wrapText: true
+          };
+
+          worksheet.mergeCells(idRow, leftColumn, idRow, rightColumn);
+          const idCell = worksheet.getCell(idRow, leftColumn);
+          idCell.value = student.studentId || "";
+          idCell.alignment = {
+            horizontal: "center",
+            vertical: "middle"
+          };
+
+          const photo = photosByStudentId.get(normalizeStudentId(student.studentId));
+          if (photo) {
+            const imageId = workbook.addImage({
+              base64: photo.base64,
+              extension: photo.extension
+            });
+            const cardWidthColumns = rightColumn - leftColumn + 1;
+            const centeredImageWidthColumns = 1.2;
+            const imageHorizontalOffset = (cardWidthColumns - centeredImageWidthColumns) / 2;
+            worksheet.addImage(imageId, {
+              tl: { col: leftColumn - 1 + imageHorizontalOffset, row: topRow - 1 + 0.08 },
+              br: { col: leftColumn - 1 + imageHorizontalOffset + centeredImageWidthColumns, row: imageBottomRow - 0.08 }
+            });
+          } else {
+            const placeholderRow = topRow + 2;
+            worksheet.mergeCells(placeholderRow, leftColumn, placeholderRow, rightColumn);
+            const placeholderCell = worksheet.getCell(placeholderRow, leftColumn);
+            placeholderCell.value = "No photo";
+            placeholderCell.font = {
+              italic: true,
+              color: { argb: "FF7A7A7A" }
+            };
+            placeholderCell.alignment = {
+              horizontal: "center",
+              vertical: "middle"
+            };
+          }
+        });
+      }
+
+      function applyPhotoCardFill(worksheet, topRow, bottomRow, leftColumn, rightColumn) {
+        for (let row = topRow; row <= bottomRow; row += 1) {
+          for (let column = leftColumn; column <= rightColumn; column += 1) {
+            const cell = worksheet.getCell(row, column);
+            cell.fill = {
+              type: "pattern",
+              pattern: "solid",
+              fgColor: { argb: "FFF2F2F2" }
+            };
+          }
+        }
       }
 
       function buildWeekColumns(totalWeeks, startDate, classFreeWeek) {
